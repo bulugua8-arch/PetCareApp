@@ -5,16 +5,22 @@ from fpdf import FPDF
 import os
 import pandas as pd
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection
 
-# --- 1. 路径与配置 ---
+# --- 1. 初始化云端表格连接 ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# --- 2. 路径配置 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "simhei.ttf")
-QR_PATH = os.path.join(BASE_DIR, "wechat_qr.png")
-DB_PATH = os.path.join(BASE_DIR, "pet_database.csv")
+QR_PATH = os.path.join(BASE_DIR, "wechat_qr.png") # 你的微信二维码
+LOGO_PATH = os.path.join(BASE_DIR, "logo.png")
 
-# --- 2. 工具函数 (PDF & 数据保存) ---
+# --- 3. PDF 生成类 ---
 class PetReportPDF(FPDF):
     def header(self):
+        if os.path.exists(LOGO_PATH):
+            self.image(LOGO_PATH, 10, 8, 33)
         self.add_font("SimHei", "", FONT_PATH)
         self.set_font("SimHei", size=16)
         self.cell(0, 10, "高定宠物专属生活与喂养指导信", ln=True, align="C")
@@ -26,66 +32,60 @@ def create_pdf(text):
     pdf.add_font("SimHei", "", FONT_PATH)
     pdf.set_font("SimHei", size=11)
     pdf.multi_cell(0, 7, text)
+    # PDF 底部也带上二维码
     if os.path.exists(QR_PATH):
         pdf.ln(10)
         pdf.image(QR_PATH, x=85, y=pdf.get_y(), w=40)
     return bytes(pdf.output())
 
-def save_to_database(data):
-    data['录入时间'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    df = pd.DataFrame([data])
-    if not os.path.exists(DB_PATH):
-        df.to_csv(DB_PATH, index=False, encoding='utf-8-sig')
-    else:
-        df.to_csv(DB_PATH, mode='a', header=False, index=False, encoding='utf-8-sig')
+# --- 4. 自动写入云端表格逻辑 ---
+def sync_to_gsheets(new_data):
+    try:
+        new_data['录入时间'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        existing_data = conn.read(spreadsheet=st.secrets["GSHEETS_URL"])
+        updated_df = pd.concat([existing_data, pd.DataFrame([new_data])], ignore_index=True)
+        conn.update(spreadsheet=st.secrets["GSHEETS_URL"], data=updated_df)
+        return True
+    except:
+        return False
 
-# --- 3. 界面初始化 ---
+# --- 5. 界面初始化 ---
 st.set_page_config(page_title="高级宠物档案系统", layout="wide")
 
 try:
     api_key = st.secrets["DEEPSEEK_API_KEY"]
     base_url = st.secrets["DEEPSEEK_BASE_URL"]
-    admin_password = st.secrets["ADMIN_PASSWORD"] # 读取你刚刚设置的密码
+    admin_pwd = st.secrets["ADMIN_PASSWORD"]
+    gsheets_url = st.secrets["GSHEETS_URL"]
 except:
-    st.error("❌ 后台配置不完整，请检查 Secrets。")
+    st.error("❌ Secrets 配置不完整，请检查 API Key、密码和表格网址。")
     st.stop()
 
-# --- 4. 侧边栏设计 ---
+# 侧边栏
 with st.sidebar:
-    st.header("⚙️ 系统菜单")
-    # 客户一般不会去点这个，点开了也需要密码
-    is_admin = st.checkbox("🔑 管理员后台")
+    st.header("⚙️ 顾问后台")
+    is_admin = st.checkbox("🔑 进入管理员模式")
     st.divider()
-    st.write("欢迎使用本系统")
+    st.info("填写右侧信息，一键生成专属报告。")
 
-# --- 5. 逻辑分流：管理员界面 vs 客户界面 ---
+# --- 6. 逻辑分流 ---
 
 if is_admin:
-    # --- 情况 A: 管理员后台 (加锁) ---
-    st.title("📊 内部资料库")
+    # 管理员后台
+    st.title("📊 实时客户资料库")
     input_pwd = st.text_input("请输入管理员密码", type="password")
-    
-    if input_pwd == admin_password:
-        st.success("密码正确，已进入后台")
-        if os.path.exists(DB_PATH):
-            df = pd.read_csv(DB_PATH)
-            st.subheader("📋 客户记录明细")
-            st.dataframe(df, use_container_width=True)
-            
-            st.subheader("📈 品种分布统计")
+    if input_pwd == admin_pwd:
+        df = conn.read(spreadsheet=gsheets_url)
+        st.dataframe(df, use_container_width=True)
+        st.subheader("🐱 品种分布统计")
+        if not df.empty and '品种' in df.columns:
             st.bar_chart(df['品种'].value_counts())
-            
-            csv_data = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-            st.download_button("📥 导出资料库 Excel", data=csv_data, file_name="customer_data.csv")
-        else:
-            st.info("暂无数据。")
     elif input_pwd != "":
-        st.error("❌ 密码错误，无法查看信息")
+        st.error("密码错误")
 
 else:
-    # --- 情况 B: 客户填表模式 (完全保密) ---
+    # 客户填表模式
     st.title("🐾 宠物专属档案生成")
-    st.write("填写信息后，AI 顾问将为您生成下月养护计划。")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -97,36 +97,37 @@ else:
     with col3:
         vaccine = st.selectbox("疫苗情况", ["已齐", "未齐", "不详"])
 
-    col4, col5 = st.columns(2)
-    with col4:
-        pet_char = st.text_input("性格", value="乖巧")
-    with col5:
-        pet_food = st.text_input("主粮品牌", value="添赐力")
-
-    if st.button("✨ 生成指导信", type="primary", use_container_width=True):
-        pet_info = {
-            "名字": pet_name, "品种": pet_breed, "年龄": pet_age, 
-            "体重": f"{pet_weight}kg", "性格": pet_char, 
-            "主食": pet_food, "疫苗": vaccine
-        }
+    if st.button("✨ 生成指导信并同步", type="primary", use_container_width=True):
+        info = {"名字": pet_name, "品种": pet_breed, "年龄": pet_age, "体重": pet_weight, "疫苗": vaccine}
         
-        # 存入数据库
-        save_to_database(pet_info)
+        # 自动同步到 Google 表格
+        if sync_to_gsheets(info):
+            st.toast("✅ 数据已存档到云端", icon="📈")
         
-        with st.spinner("顾问撰写中..."):
+        with st.spinner("顾问正在撰写中..."):
             try:
                 client = OpenAI(api_key=api_key, base_url=base_url)
-                response = client.chat.completions.create(
+                resp = client.chat.completions.create(
                     model="deepseek-chat",
-                    messages=[{"role": "system", "content": "你是资深宠物顾问"},
-                              {"role": "user", "content": str(pet_info)}]
+                    messages=[{"role":"system","content":"你是一位资深宠物顾问"},
+                              {"role":"user","content":str(info)}]
                 )
-                st.session_state['report'] = response.choices[0].message.content
-                st.success("✅ 生成成功！")
+                st.session_state['report'] = resp.choices[0].message.content
             except Exception as e:
-                st.error(f"生成出错: {e}")
+                st.error(f"生成失败: {e}")
 
+    # --- 报告显示区域 ---
     if 'report' in st.session_state:
+        st.markdown("---")
         st.markdown(st.session_state['report'])
+        
+        # 按钮：下载 PDF
         pdf_data = create_pdf(st.session_state['report'])
-        st.download_button("📥 下载专属 PDF 报告", data=pdf_data, file_name=f"{pet_name}养护计划.pdf")
+        st.download_button("📥 下载专属 PDF 报告", data=pdf_data, file_name=f"{pet_name}建议.pdf", use_container_width=True)
+        
+        # 【重点：这里把你的二维码找回来】
+        if os.path.exists(QR_PATH):
+            st.divider()
+            col_a, col_b, col_c = st.columns([1, 1, 1])
+            with col_b: # 放在中间一栏，更美观
+                st.image(QR_PATH, caption="扫码添加顾问微信，领取精美礼品", width=250)

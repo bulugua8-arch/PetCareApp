@@ -44,12 +44,7 @@ def create_pdf(text):
     return bytes(pdf.output())
 
 # ==========================================
-# 3. Streamlit 网页界面
 # ==========================================
-st.set_page_config(page_title="高级宠物档案系统", page_icon="🐾", layout="wide")
-
-with st.sidebar:
-    # ==========================================
 # 3. 界面逻辑 (修改后：自动读取后台秘密，不给客户看)
 # ==========================================
 st.set_page_config(page_title="高级宠物档案系统", page_icon="🐾", layout="wide")
@@ -70,25 +65,6 @@ with st.sidebar:
     if not os.path.exists(FONT_PATH):
         st.error("❌ 缺字体文件")
     st.info("💡 填好右侧信息，点击生成即可。")
-# --- 第一行：基础信息 ---
-col1, col2, col3 = st.columns(3)
-with col1:
-    pet_name = st.text_input("宠物昵称", value="多多")
-    pet_breed = st.text_input("品种", value="布偶猫")
-with col2:
-    pet_age = st.text_input("年龄", value="8个月")
-    pet_weight = st.number_input("体重 (kg)", value=4.5, step=0.1)
-with col3:
-    vaccine_status = st.selectbox("疫苗接种情况", ["已完全接种", "接种中(缺针)", "未接种", "抗体合格"])
-
-# --- 第二行：细节偏好 ---
-col4, col5, col6 = st.columns(3)
-with col4:
-    pet_char = st.text_input("性格特征", value="胆小，粘人")
-with col5:
-    pet_food = st.text_input("目前主食粮品牌", value="添赐力")
-with col6:
-    wash_freq = st.slider("洗护频率 (天/次)", 1, 60, 14)
 
 st.divider()
 
